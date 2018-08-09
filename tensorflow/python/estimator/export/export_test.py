@@ -107,7 +107,7 @@ class ServingInputReceiverTest(test_util.TensorFlowTestCase):
           receiver_tensors=None)
 
     with self.assertRaisesRegexp(
-        ValueError, "receiver_tensors keys must be strings"):
+        ValueError, "receiver_tensor keys must be strings"):
       export.ServingInputReceiver(
           features=features,
           receiver_tensors={
@@ -271,7 +271,7 @@ class SupervisedInputReceiverTest(test_util.TensorFlowTestCase):
           receiver_tensors=None)
 
     with self.assertRaisesRegexp(
-        ValueError, "receiver_tensors keys must be strings"):
+        ValueError, "receiver_tensor keys must be strings"):
       export.SupervisedInputReceiver(
           features=features,
           labels=labels,
@@ -458,6 +458,41 @@ class ExportTest(test_util.TensorFlowTestCase):
               "bar": constant_op.constant([6])}
     with self.assertRaises(ValueError):
       export.build_raw_supervised_input_receiver_fn(features, labels)
+
+  def test_build_supervised_input_receiver_fn_from_input_fn(self):
+    def dummy_input_fn():
+      return ({"x": constant_op.constant([[1], [1]]),
+               "y": constant_op.constant(["hello", "goodbye"])},
+              constant_op.constant([[1], [1]]))
+
+    input_receiver_fn = export.build_supervised_input_receiver_fn_from_input_fn(
+        dummy_input_fn)
+
+    with ops.Graph().as_default():
+      input_receiver = input_receiver_fn()
+      self.assertEqual(set(["x", "y"]),
+                       set(input_receiver.features.keys()))
+      self.assertIsInstance(input_receiver.labels, ops.Tensor)
+      self.assertEqual(set(["x", "y", "label"]),
+                       set(input_receiver.receiver_tensors.keys()))
+
+  def test_build_supervised_input_receiver_fn_from_input_fn_args(self):
+    def dummy_input_fn(feature_key="x"):
+      return ({feature_key: constant_op.constant([[1], [1]]),
+               "y": constant_op.constant(["hello", "goodbye"])},
+              {"my_label": constant_op.constant([[1], [1]])})
+
+    input_receiver_fn = export.build_supervised_input_receiver_fn_from_input_fn(
+        dummy_input_fn, feature_key="z")
+
+    with ops.Graph().as_default():
+      input_receiver = input_receiver_fn()
+      self.assertEqual(set(["z", "y"]),
+                       set(input_receiver.features.keys()))
+      self.assertEqual(set(["my_label"]),
+                       set(input_receiver.labels.keys()))
+      self.assertEqual(set(["z", "y", "my_label"]),
+                       set(input_receiver.receiver_tensors.keys()))
 
   def test_build_all_signature_defs_without_receiver_alternatives(self):
     receiver_tensor = array_ops.placeholder(dtypes.string)
@@ -705,7 +740,7 @@ class TensorServingReceiverTest(test_util.TensorFlowTestCase):
           receiver_tensors=None)
 
     with self.assertRaisesRegexp(
-        ValueError, "receiver_tensors keys must be strings"):
+        ValueError, "receiver_tensor keys must be strings"):
       export.TensorServingInputReceiver(
           features=features,
           receiver_tensors={

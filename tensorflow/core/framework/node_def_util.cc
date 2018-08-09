@@ -86,7 +86,8 @@ string AttrSlice::SummarizeNode() const {
 string SummarizeNode(const Node& node) { return SummarizeNodeDef(node.def()); }
 
 string SummarizeNodeDef(const NodeDef& node_def) {
-  string ret = strings::StrCat(node_def.name(), " = ", node_def.op(), "[");
+  string ret = strings::StrCat(FormatNodeDefForError(node_def), " = ",
+                               node_def.op(), "[");
   strings::StrAppend(&ret, SummarizeAttrsHelper(node_def, node_def.device()));
   strings::StrAppend(&ret, "](");
 
@@ -99,6 +100,14 @@ string SummarizeNodeDef(const NodeDef& node_def) {
   }
   strings::StrAppend(&ret, ")");
   return ret;
+}
+
+string FormatNodeForError(const Node& node) {
+  return FormatNodeDefForError(node.def());
+}
+
+string FormatNodeDefForError(const NodeDef& node_def) {
+  return errors::FormatNodeNameForError(node_def.name());
 }
 
 const AttrValue* AttrSlice::Find(StringPiece attr_name) const {
@@ -378,15 +387,20 @@ Status OutputTypeForNode(const NodeDef& node_def, const OpDef& op_def,
                                  node_def.name());
 }
 
+Status OutputTypesForNode(const NodeDef& node_def, const OpDef& op_def,
+                          DataTypeVector* outputs) {
+  for (const auto& arg : op_def.output_arg()) {
+    TF_RETURN_IF_ERROR(AddArgToSig(node_def, arg, outputs));
+  }
+  return Status::OK();
+}
+
 Status InOutTypesForNode(const NodeDef& node_def, const OpDef& op_def,
                          DataTypeVector* inputs, DataTypeVector* outputs) {
   for (const auto& arg : op_def.input_arg()) {
     TF_RETURN_IF_ERROR(AddArgToSig(node_def, arg, inputs));
   }
-  for (const auto& arg : op_def.output_arg()) {
-    TF_RETURN_IF_ERROR(AddArgToSig(node_def, arg, outputs));
-  }
-  return Status::OK();
+  return OutputTypesForNode(node_def, op_def, outputs);
 }
 
 Status ValidateNodeDef(const NodeDef& node_def, const OpDef& op_def) {
@@ -629,7 +643,7 @@ Status ValidateExternalNodeDefSyntax(const NodeDef& node_def) {
 Status AttachDef(const Status& status, const NodeDef& node_def) {
   Status ret = status;
   errors::AppendToMessage(
-      &ret, strings::StrCat(" [[Node: ", SummarizeNodeDef(node_def), "]]"));
+      &ret, strings::StrCat(" [[", SummarizeNodeDef(node_def), "]]"));
   return ret;
 }
 
@@ -688,5 +702,18 @@ void AddAttr(StringPiece name, const AttrValue& value, AttrValueMap* map) {
   }
 ADD_ATTR(bool)
 #undef ADD_ATTR
+
+Status AddPrefixAndSuffixToNode(StringPiece prefix, StringPiece suffix,
+                                NodeDef* node_def) {
+  node_def->set_name(strings::StrCat(prefix, node_def->name(), suffix));
+  if (node_def->op() == "Enter" || node_def->op() == "RefEnter") {
+    string frame_name;
+    TF_RETURN_IF_ERROR(GetNodeAttr(*node_def, "frame_name", &frame_name));
+    AttrValue& attr = (*node_def->mutable_attr())["frame_name"];
+    frame_name = strings::StrCat(prefix, frame_name, suffix);
+    attr.set_s(frame_name);
+  }
+  return Status::OK();
+}
 
 }  // namespace tensorflow

@@ -20,6 +20,7 @@ from tensorflow.python.data.ops import iterator_ops
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import gen_dataset_ops
 from tensorflow.python.training import basic_session_run_hooks
+from tensorflow.python.training import checkpoint_management
 from tensorflow.python.training import saver as saver_lib
 from tensorflow.python.training import session_run_hook
 
@@ -117,7 +118,7 @@ class CheckpointInputPipelineHook(session_run_hook.SessionRunHook):
      pipeline.
 
   For saving the input pipeline checkpoint alongside the model weights use
-  @{tf.contrib.data.make_saveable_from_iterator} directly to create a
+  `tf.contrib.data.make_saveable_from_iterator` directly to create a
   `SaveableObject` and add to the `SAVEABLE_OBJECTS` collection. Note, however,
   that you will need to be careful not to restore the training iterator during
   eval. You can do that by not adding the iterator to the SAVEABLE_OBJECTS
@@ -170,6 +171,7 @@ class CheckpointInputPipelineHook(session_run_hook.SessionRunHook):
     # `checkpoint_dir` is the same as the model checkpoint directory, there are
     # no conflicts during restore.
     self._latest_filename = "checkpoint_" + checkpoint_prefix
+    self._first_run = True
 
   def begin(self):
     # Build a Saver that saves all iterators in the `GLOBAL_ITERATORS`
@@ -184,10 +186,28 @@ class CheckpointInputPipelineHook(session_run_hook.SessionRunHook):
     # pylint: enable=protected-access
     self._checkpoint_saver_hook.begin()
 
-  def after_create_session(self, session, coord):
+  def _restore_or_save_initial_ckpt(self, session):
+    # Ideally this should be run in after_create_session but is not for the
+    # following reason:
+    # Currently there is no way of enforcing an order of running the
+    # `SessionRunHooks`. Hence it is possible that the `_DatasetInitializerHook`
+    # is run *after* this hook. That is troublesome because
+    # 1. If a checkpoint exists and this hook restores it, the initializer hook
+    #    will override it.
+    # 2. If no checkpoint exists, this hook will try to save an initialized
+    #    iterator which will result in an exception.
+    #
+    # As a temporary fix we enter the following implicit contract between this
+    # hook and the _DatasetInitializerHook.
+    # 1. The _DatasetInitializerHook initializes the iterator in the call to
+    #    after_create_session.
+    # 2. This hook saves the iterator on the first call to `before_run()`, which
+    #    is guaranteed to happen after `after_create_session()` of all hooks
+    #    have been run.
+
     # Check if there is an existing checkpoint. If so, restore from it.
     # pylint: disable=protected-access
-    latest_checkpoint_path = saver_lib.latest_checkpoint(
+    latest_checkpoint_path = checkpoint_management.latest_checkpoint(
         self._checkpoint_saver_hook._checkpoint_dir,
         latest_filename=self._latest_filename)
     if latest_checkpoint_path:
@@ -202,6 +222,9 @@ class CheckpointInputPipelineHook(session_run_hook.SessionRunHook):
     # pylint: enable=protected-access
 
   def before_run(self, run_context):
+    if self._first_run:
+      self._restore_or_save_initial_ckpt(run_context.session)
+      self._first_run = False
     return self._checkpoint_saver_hook.before_run(run_context)
 
   def after_run(self, run_context, run_values):

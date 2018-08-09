@@ -122,6 +122,14 @@ message RegisterGraphRequest {
 
   // Field(s) used by TensorFlow Debugger (tfdbg).
   DebugOptions debug_options = 5;
+
+  // If graph_def contains any collective ops this must be a positive
+  // integer used to coordinate execution with other graphs.  All
+  // graphs in a distributed execution with the same
+  // collective_graph_key will coordinate to use the same step_id
+  // concurrently so that BufRendezvous entries will make the correct
+  // values accessible.
+  int64 collective_graph_key = 7;
 }
 
 message RegisterGraphResponse {
@@ -361,8 +369,11 @@ message RecvTensorResponse {
 // Out-of-band request to begin or end logging, or
 // to retrieve logs for particular steps.
 message LoggingRequest {
-  // If true, RPC logging will be activated.
-  bool rpc_logging = 1;
+  // If true, RPC logging will be enabled.
+  bool enable_rpc_logging = 1;
+
+  // If true, RPC logging will be disabled.
+  bool disable_rpc_logging = 4;
 
   // If true, discard any saved logging data (for all steps).
   bool clear = 2;
@@ -455,6 +466,11 @@ message RecvBufRequest {
   // Optional, for annotating the timeline.
   string src_device = 8;
   string dst_device = 9;
+
+  // Depending on the RPC system in use, it may be necessary to set this
+  // id to detect resends of RPCs where the server is not aware that
+  // the prior RPC failed.
+  int64 request_id = 10;
 }
 
 message RecvBufResponse {

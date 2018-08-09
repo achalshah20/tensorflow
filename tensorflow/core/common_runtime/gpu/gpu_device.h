@@ -39,6 +39,7 @@ limitations under the License.
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "tensorflow/core/lib/gtl/inlined_vector.h"
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/stream_executor.h"
 #include "tensorflow/core/platform/types.h"
@@ -119,7 +120,7 @@ class BaseGPUDevice : public LocalDevice {
     se::Stream* compute = nullptr;
     se::Stream* host_to_device = nullptr;
     se::Stream* device_to_host = nullptr;
-    se::Stream* device_to_device = nullptr;
+    gtl::InlinedVector<se::Stream*, 4> device_to_device;
   };
   class StreamGroupFactory;
 
@@ -138,6 +139,9 @@ class BaseGPUDevice : public LocalDevice {
                           int stream_id, Allocator* allocator);
 
   void ComputeHelper(OpKernel* op_kernel, OpKernelContext* context);
+
+  string ComputeOpKernelDebugString(const OpKernel& op_kernel,
+                                    const int& stream_id);
 
   // This method returns an initialization status, in addition to
   // calling the "done" StatusCallback, if there is a failure to

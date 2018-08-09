@@ -41,6 +41,7 @@ from tensorflow.python.ops import gen_math_ops
 # go/tf-wildcard-import
 # pylint: disable=wildcard-import
 from tensorflow.python.ops.gen_array_ops import *
+from tensorflow.python.ops.gen_array_ops import reverse_v2 as reverse  # pylint: disable=unused-import
 from tensorflow.python.util import deprecation
 from tensorflow.python.util.tf_export import tf_export
 # pylint: enable=wildcard-import
@@ -537,7 +538,7 @@ def slice(input_, begin, size, name=None):
   words, `begin[i]` is the offset into the 'i'th dimension of `input` that you
   want to slice from.
 
-  Note that @{tf.Tensor.__getitem__} is typically a more pythonic way to
+  Note that `tf.Tensor.__getitem__` is typically a more pythonic way to
   perform slices, as it allows you to write `foo[3:7, :-2]` instead of
   `tf.slice(foo, [3, 0], [4, foo.get_shape()[1]-2])`.
 
@@ -593,7 +594,7 @@ def strided_slice(input_,
 
   **Instead of calling this op directly most users will want to use the
   NumPy-style slicing syntax (e.g. `tensor[..., 3:4:-1, tf.newaxis, 3]`), which
-  is supported via @{tf.Tensor.__getitem__} and @{tf.Variable.__getitem__}.**
+  is supported via `tf.Tensor.__getitem__` and `tf.Variable.__getitem__`.**
   The interface of this op is a low-level encoding of the slicing syntax.
 
   Roughly speaking, this op extracts a slice of size `(end-begin)/stride`
@@ -635,10 +636,10 @@ def strided_slice(input_,
   `foo[:4, tf.newaxis, :2]` would produce a shape `(4, 1, 2)` tensor.
 
   If the ith bit of `shrink_axis_mask` is set, it implies that the ith
-  specification shrinks the dimensionality by 1. `begin[i]`, `end[i]` and
-  `strides[i]` must imply a slice of size 1 in the dimension. For example in
-  Python one might do `foo[:, 3, :]` which would result in
-  `shrink_axis_mask` equal to 2.
+  specification shrinks the dimensionality by 1, taking on the value at index
+  `begin[i]`. `end[i]` and `strides[i]` are ignored in this case. For example in
+  Python one might do `foo[:, 3, :]` which would result in `shrink_axis_mask`
+  equal to 2.
 
 
   NOTE: `begin` and `end` are zero-indexed.
@@ -722,7 +723,7 @@ def _SliceHelperVar(var, slice_spec):
   """Creates a slice helper object given a variable.
 
   This allows creating a sub-tensor from part of the current contents
-  of a variable. See @{tf.Tensor.__getitem__} for detailed examples
+  of a variable. See `tf.Tensor.__getitem__` for detailed examples
   of slicing.
 
   This function in addition also allows assignment to a sliced range.
@@ -1623,7 +1624,7 @@ def ones_like(tensor, dtype=None, name=None, optimize=True):
   Args:
     tensor: A `Tensor`.
     dtype: A type for the returned `Tensor`. Must be `float32`, `float64`,
-      `int8`, `uint8`, `int16`, `uint16`, int32`, `int64`,
+      `int8`, `uint8`, `int16`, `uint16`, `int32`, `int64`,
       `complex64`, `complex128` or `bool`.
     name: A name for the operation (optional).
     optimize: if true, attempt to statically determine the shape of 'tensor'
@@ -1897,7 +1898,7 @@ def pad(tensor, paddings, mode="CONSTANT", name=None, constant_values=0):  # pyl
         and paddings_constant is not None):
       new_shape = []
       for padding, dim in zip(paddings_constant, input_shape.as_list()):
-        if padding is None or dim is None or not all(padding):
+        if padding is None or dim is None or any((x is None for x in padding)):
           new_shape.append(None)
         else:
           new_shape.append(sum(padding) + dim)
@@ -2607,14 +2608,6 @@ def where(condition, x=None, y=None, name=None):
     return gen_math_ops.select(condition=condition, x=x, y=y, name=name)
   else:
     raise ValueError("x and y must both be non-None or both be None.")
-
-
-@tf_export("reverse")
-def reverse(tensor, axis, name=None):
-  return gen_array_ops.reverse_v2(tensor, axis, name)
-
-
-reverse.__doc__ = gen_array_ops.reverse_v2.__doc__
 
 
 # pylint: disable=redefined-builtin
