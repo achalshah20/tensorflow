@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/common_runtime/function.h"
+#include "tensorflow/core/common_runtime/optimization_registry.h"
 #include "tensorflow/core/common_runtime/placer.h"
 #include "tensorflow/core/common_runtime/rendezvous_mgr.h"
 #include "tensorflow/core/framework/function.h"
@@ -104,13 +105,6 @@ class PartitionedCallOp : public AsyncOpKernel {
         for (auto d : lib->device_mgr()->ListDevices()) {
           device_set.AddDevice(d);
         }
-        Placer placer(graph.get(), &device_set);
-        OP_REQUIRES_OK_ASYNC(ctx, placer.Run(), done);
-
-        std::unordered_map<string, std::unique_ptr<Graph>> subgraphs;
-        OP_REQUIRES_OK_ASYNC(
-            ctx, PartitionHelper(device_set, std::move(graph), &subgraphs),
-            done);
 
         // The FunctionLibraryRuntime's library cannot be mutated from within
         // an OpKernel, so functions are instantiated in an overlay library.
@@ -123,6 +117,47 @@ class PartitionedCallOp : public AsyncOpKernel {
         FunctionLibraryDefinition* overlay_lib =
             new FunctionLibraryDefinition(*lib->GetFunctionLibraryDefinition());
         overlay_libs_.emplace(lib, overlay_lib);
+
+        GraphOptimizationPassOptions optimization_options;
+        // TODO(akshayka): Thread SessionOptions (if any) into this kernel, or
+        // make it possible to specify the relevant options via attributes.
+        SessionOptions session_options;
+        session_options.env = ctx->env();
+        optimization_options.session_options = &session_options;
+        optimization_options.graph = &graph;
+        optimization_options.flib_def = overlay_lib;
+        optimization_options.device_set = &device_set;
+        OP_REQUIRES_OK_ASYNC(
+            ctx,
+            OptimizationPassRegistry::Global()->RunGrouping(
+                OptimizationPassRegistry::PRE_PLACEMENT, optimization_options),
+            done);
+        Placer placer(graph.get(), &device_set);
+        OP_REQUIRES_OK_ASYNC(ctx, placer.Run(), done);
+        OP_REQUIRES_OK_ASYNC(
+            ctx,
+            OptimizationPassRegistry::Global()->RunGrouping(
+                OptimizationPassRegistry::POST_PLACEMENT, optimization_options),
+            done);
+        OP_REQUIRES_OK_ASYNC(
+            ctx,
+            OptimizationPassRegistry::Global()->RunGrouping(
+                OptimizationPassRegistry::POST_REWRITE_FOR_EXEC,
+                optimization_options),
+            done);
+
+        std::unordered_map<string, std::unique_ptr<Graph>> subgraphs;
+        OP_REQUIRES_OK_ASYNC(
+            ctx, PartitionHelper(device_set, std::move(graph), &subgraphs),
+            done);
+        optimization_options.graph = nullptr;
+        optimization_options.device_set = nullptr;
+        optimization_options.partition_graphs = &subgraphs;
+        OP_REQUIRES_OK_ASYNC(ctx,
+                             OptimizationPassRegistry::Global()->RunGrouping(
+                                 OptimizationPassRegistry::POST_PARTITIONING,
+                                 optimization_options),
+                             done);
 
         auto handles = tensorflow::MakeUnique<gtl::FlatMap<string, FHandle>>();
         for (const auto& pair : subgraphs) {
@@ -175,7 +210,7 @@ class PartitionedCallOp : public AsyncOpKernel {
         TF_RETURN_IF_ERROR(node->attrs().Find("T", &attr_value));
         DataType dtype = attr_value->type();
         if (dtype == DT_RESOURCE) {
-          ResourceHandle handle = args[index].flat<ResourceHandle>()(0);
+          const ResourceHandle& handle = args[index].flat<ResourceHandle>()(0);
           node->set_assigned_device_name(handle.device());
         }
       }
@@ -243,12 +278,6 @@ class PartitionedCallOp : public AsyncOpKernel {
   //      device, and
   //  (3) records which `Arg` and `Retval` nodes live in host memory.
   Status UpdateArgAndRetMetadata(const string& device, Graph* subgraph) {
-    if (arg_and_ret_indices_.find(device) != arg_and_ret_indices_.end()) {
-      // This function has already been partitioned, albeit for a different
-      // function library.
-      return Status::OK();
-    }
-
     ArgAndRetIndices indices;
     std::vector<int>* arg_indices = &indices.first;
     std::vector<int>* ret_indices = &indices.second;
@@ -256,6 +285,8 @@ class PartitionedCallOp : public AsyncOpKernel {
     std::vector<std::pair<Node*, int>> ret_nodes;
     const AttrValue* attr_value;
 
+    // Find the Arg and Retval nodes, along with their corresponding indices
+    // in the original function.
     for (Node* node : subgraph->op_nodes()) {
       string node_type = node->type_string();
       if (node_type == FunctionLibraryDefinition::kArgOp) {
@@ -271,6 +302,8 @@ class PartitionedCallOp : public AsyncOpKernel {
       }
     }
 
+    // Rewrite the indices of the Arg and Retval nodes for this function
+    // to range from 0 to the number of Arg nodes, Retval nodes, respectively.
     auto sort_by_index = [](std::pair<Node*, int> one,
                             std::pair<Node*, int> two) -> bool {
       return one.second < two.second;
@@ -300,7 +333,12 @@ class PartitionedCallOp : public AsyncOpKernel {
       arg_and_ret_alloc_attrs_[device].second.push_back(alloc_attr);
     }
 
-    arg_and_ret_indices_.emplace(device, indices);
+    // If this kernel execution corresponds to a StatefulPartitionedCallOp,
+    // `arg_and_ret_indices_` might have been populated by a previous
+    // invocation.
+    if (arg_and_ret_indices_.find(device) == arg_and_ret_indices_.end()) {
+      arg_and_ret_indices_.emplace(device, indices);
+    }
     return Status::OK();
   }
 

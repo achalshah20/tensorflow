@@ -17,13 +17,12 @@ limitations under the License.
 
 #include "tensorflow/compiler/xla/literal_util.h"
 #include "tensorflow/compiler/xla/service/gpu/ir_emission_utils.h"
+#include "tensorflow/compiler/xla/service/hlo_casting_utils.h"
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/compiler/xla/window_util.h"
 
 namespace xla {
 namespace gpu {
-
-using tensorflow::gtl::ArraySlice;
 
 // We want the input/output feature counts of an f16 conv to be factors of 8,
 // because without this cudnn can't use tensor cores on the conv.
@@ -42,7 +41,7 @@ static constexpr double kMaxBytesTouchedIncrease = 1.2;
 
 // Pads the given dimensions in the given shape up to a multiple of
 // kDesiredNumFeaturesFactor.
-static Shape PadShape(Shape s, ArraySlice<int64> dims) {
+static Shape PadShape(Shape s, absl::Span<const int64> dims) {
   for (int64 dim : dims) {
     int64 dim_to_pad_size = s.dimensions(dim);
     int64 new_dim_to_pad_size =
@@ -64,8 +63,8 @@ static HloInstruction* PadInstruction(HloInstruction* instr,
   HloComputation* comp = instr->parent();
 
   const Shape& shape = instr->shape();
-  auto* zero = comp->AddInstruction(HloInstruction::CreateConstant(
-      LiteralUtil::Zero(shape.element_type()).CloneToUnique()));
+  auto* zero = comp->AddInstruction(
+      HloInstruction::CreateConstant(LiteralUtil::Zero(shape.element_type())));
 
   PaddingConfig pad_config = MakeNoPaddingConfig(ShapeUtil::Rank(shape));
 
@@ -211,7 +210,11 @@ static std::vector<HloInstruction*> GetRelevantConvs(HloComputation* comp) {
   std::vector<HloInstruction*> convs;
   for (HloInstruction* instr : comp->instructions()) {
     if (IsCustomCallToDnnConvolution(*instr) &&
-        instr->operand(0)->shape().element_type() == F16) {
+        instr->operand(0)->shape().element_type() == F16 &&
+        // TODO(timshen): Disable for fused conv for now. Implement it if it's
+        // needed.
+        Cast<HloCustomCallInstruction>(instr)->custom_call_target() !=
+            kCudnnConvBiasActivationForwardCallTarget) {
       convs.push_back(instr);
     }
   }

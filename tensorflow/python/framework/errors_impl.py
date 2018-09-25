@@ -25,6 +25,7 @@ from tensorflow.core.lib.core import error_codes_pb2
 from tensorflow.python import pywrap_tensorflow as c_api
 from tensorflow.python.framework import c_api_util
 from tensorflow.python.util import compat
+from tensorflow.python.util import tf_inspect
 from tensorflow.python.util.tf_export import tf_export
 
 
@@ -47,10 +48,16 @@ class OpError(Exception):
       error_code: The `error_codes_pb2.Code` describing the error.
     """
     super(OpError, self).__init__()
-    self._message = message
     self._node_def = node_def
     self._op = op
+    self._message = message
     self._error_code = error_code
+
+  def __reduce__(self):
+    # Allow the subclasses to accept less arguments in their __init__.
+    init_argspec = tf_inspect.getargspec(self.__class__.__init__)
+    args = tuple(getattr(self, arg) for arg in init_argspec.args[1:])
+    return self.__class__, args
 
   @property
   def message(self):
@@ -475,8 +482,8 @@ _CODE_TO_EXCEPTION_CLASS = {
 
 c_api.PyExceptionRegistry_Init(_CODE_TO_EXCEPTION_CLASS)
 
-_EXCEPTION_CLASS_TO_CODE = dict((
-    (class_, code) for (code, class_) in _CODE_TO_EXCEPTION_CLASS.items()))
+_EXCEPTION_CLASS_TO_CODE = {
+    class_: code for code, class_ in _CODE_TO_EXCEPTION_CLASS.items()}
 
 
 @tf_export("errors.exception_type_from_error_code")
